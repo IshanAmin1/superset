@@ -66,9 +66,10 @@ started.
 - `observeDashboardLoad`: only when the status changes, for example
   `loading` → `ready`. Going from 3/10 to 4/10 charts loaded sends nothing;
   the host app can call `getDashboardLoadState()` for the latest counts.
-- `observeChartFailure`: once for each failed chart. When the dashboard
-  starts loading again (for example after a refresh), we forget which
-  failures were sent, so a chart that fails again is reported again.
+- `observeChartFailure`: once for each failed query. Every chart records
+  when its latest query started (`chartUpdateStartTime`). A chart that
+  reloads and fails again is reported again; a chart that simply stays
+  failed (for example while the user switches tabs) is not.
 - A chart can fail after its data arrived, while it is being drawn. Then the
   status changes from `ready` to `partial` and the failure is reported.
 
@@ -108,11 +109,12 @@ Files: `superset-frontend/src/embedded/loadTracker.ts`,
   return a load message.
 - For each failed visible chart we haven't reported yet, return a failure
   message.
-- When the status goes back to `loading`, forget the reported failures.
+- Remember each reported failure with its query start time, so the same
+  failed query is never reported twice.
 - Return what to remember for next time. Don't modify `previous`.
 - **Tests:** first run, only the counts changed, failure reported once,
-  failure reported again after a refresh, chart fails after loading,
-  failure in a closed tab.
+  failure reported again after a reload, no repeat after switching tabs,
+  chart fails after loading, failure in a closed tab.
 
 **Done when:** all `loadTracker.test.ts` tests pass, and the type check
 (`npm run type`) and lint pass.
