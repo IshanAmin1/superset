@@ -175,13 +175,23 @@ export function summarizeLoadState(
 
 /** Returns the chart's name, preferring a name set on the dashboard. */
 function getChartName(state: LoadTrackerInput, chartId: number): string {
-  const chartItem = Object.values(state.dashboardLayout.present).find(
-    item => item.type === CHART_TYPE && item.meta.chartId === chartId,
+  // A chart placed more than once can have a different name on each copy,
+  // so use the copy that isn't inside a closed tab.
+  const layout = state.dashboardLayout.present;
+  const openTabs = new Set(state.dashboardState?.activeTabs ?? []);
+  const chartItem = Object.values(layout).find(
+    item =>
+      item.type === CHART_TYPE &&
+      item.meta.chartId === chartId &&
+      !isInClosedTab(item, layout, openTabs),
   );
-  // A name set on the dashboard wins over the chart's saved name.
+  // Same order ChartHolder uses for the label: the dashboard override, then
+  // the name stored on the layout item. The saved slice name is a fallback
+  // for when the layout has no name.
   const dashboardName = chartItem?.meta.sliceNameOverride;
+  const layoutName = chartItem?.meta.sliceName;
   const savedName = state.sliceEntities.slices[chartId]?.slice_name;
-  return dashboardName || savedName || `Chart ${chartId}`;
+  return dashboardName || layoutName || savedName || `Chart ${chartId}`;
 }
 
 /** Builds the failure message for one chart. */

@@ -383,6 +383,44 @@ test('advanceTracker prefers the layout name and falls back to defaults', () => 
   ]);
 });
 
+test('advanceTracker uses the layout sliceName when slice metadata is missing', () => {
+  // No sliceEntities entry for chart 1, but the layout still has its name.
+  const layout = toLayout([
+    chart(1, ['ROOT_ID'], { sliceName: 'From layout' }),
+  ]);
+  const { failures } = advanceTracker(
+    undefined,
+    makeState({ layout, charts: { 1: { status: 'failed' } } }),
+  );
+  expect(failures.map(f => f.chartName)).toEqual(['From layout']);
+});
+
+test('advanceTracker names a chart placed twice after its visible copy', () => {
+  // Chart 1 is in both tabs with a different name in each. The tab A copy
+  // comes first in the layout, but only tab B is open.
+  const layout = toLayout([
+    item('TABS-1', TABS_TYPE, ['ROOT_ID']),
+    item('TAB-A', TAB_TYPE, ['ROOT_ID', 'TABS-1']),
+    item('TAB-B', TAB_TYPE, ['ROOT_ID', 'TABS-1']),
+    chart(1, ['ROOT_ID', 'TABS-1', 'TAB-A'], { sliceNameOverride: 'Hidden' }),
+    {
+      ...chart(1, ['ROOT_ID', 'TABS-1', 'TAB-B'], {
+        sliceNameOverride: 'Visible',
+      }),
+      id: 'CHART-copy',
+    },
+  ]);
+  const { failures } = advanceTracker(
+    undefined,
+    makeState({
+      layout,
+      activeTabs: ['TAB-B'],
+      charts: { 1: { status: 'failed' } },
+    }),
+  );
+  expect(failures.map(f => f.chartName)).toEqual(['Visible']);
+});
+
 test('advanceTracker does not modify the previous state', () => {
   // An earlier result must stay unchanged after a later call.
   const first = advanceTracker(
