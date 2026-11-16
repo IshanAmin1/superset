@@ -30,6 +30,7 @@ import {
   summarizeLoadState,
 } from './loadTracker';
 
+// One layout item (chart, row, tab, ...); `parents` is what it sits inside.
 const item = (
   id: string,
   type: LayoutItem['type'],
@@ -43,15 +44,23 @@ const chart = (chartId: number, parents: string[], meta = {}) =>
 const toLayout = (items: LayoutItem[]): DashboardLayout =>
   Object.fromEntries(items.map(i => [i.id, i]));
 
-// No tabs: charts 1 and 2 in a row.
+// A dashboard without tabs:
+//   ROW-1
+//   ├── chart 1
+//   └── chart 2
 const flatLayout = toLayout([
   item('ROW-1', ROW_TYPE, ['ROOT_ID', 'GRID_ID']),
   chart(1, ['ROOT_ID', 'GRID_ID', 'ROW-1']),
   chart(2, ['ROOT_ID', 'GRID_ID', 'ROW-1']),
 ]);
 
-// Tabs A and B; chart 1 in A, chart 2 in B, and inside A a nested tab
-// group with chart 3 in A1 and chart 4 in A2.
+// A dashboard with tabs, and nested tabs inside tab A:
+//   TAB-A
+//   ├── chart 1
+//   ├── TAB-A1 ── chart 3
+//   └── TAB-A2 ── chart 4
+//   TAB-B
+//   └── chart 2
 const tabbedLayout = toLayout([
   item('TABS-1', TABS_TYPE, ['ROOT_ID']),
   item('TAB-A', TAB_TYPE, ['ROOT_ID', 'TABS-1']),
@@ -65,9 +74,11 @@ const tabbedLayout = toLayout([
   chart(4, ['ROOT_ID', 'TABS-1', 'TAB-A', 'TABS-2', 'TAB-A2']),
 ]);
 
-// `start` is the chart's chartUpdateStartTime: it changes on every re-query.
+// alert = the chart's error text; start = when its latest query started
+// (it changes every time the chart re-queries).
 type ChartSetup = { status: string | null; alert?: string; start?: number };
 
+// A fake store state. hydrated: false = the dashboard hasn't loaded yet.
 function makeState({
   layout = flatLayout,
   activeTabs = [],
@@ -104,17 +115,19 @@ function makeState({
   } as unknown as LoadTrackerInput;
 }
 
-// step 1: getVisibleChartIds
+// Step 1: getVisibleChartIds
 
 test('getVisibleChartIds returns all charts when there are no tabs', () => {
   expect(getVisibleChartIds(flatLayout, [])).toEqual([1, 2]);
 });
 
 test('getVisibleChartIds skips charts under an inactive tab', () => {
+  // Only tab B is open, so the charts in tab A are hidden.
   expect(getVisibleChartIds(tabbedLayout, ['TAB-B'])).toEqual([2]);
 });
 
 test('getVisibleChartIds handles nested tabs', () => {
+  // Tab A and inner tab A2 are open, so chart 3 (in A1) is hidden.
   expect(getVisibleChartIds(tabbedLayout, ['TAB-A', 'TAB-A2'])).toEqual([1, 4]);
 });
 
@@ -126,9 +139,10 @@ test('getVisibleChartIds counts a chart placed twice once', () => {
   expect(getVisibleChartIds(layout, [])).toEqual([1]);
 });
 
-// step 2: summarizeLoadState
+// Step 2: summarizeLoadState
 
 test('summarizeLoadState is loading before the dashboard hydrates', () => {
+  // The charts look finished, but the dashboard itself hasn't loaded yet.
   const state = makeState({
     hydrated: false,
     charts: { 1: { status: 'success' }, 2: { status: 'success' } },
@@ -147,8 +161,7 @@ test('summarizeLoadState is ready with no visible charts', () => {
 });
 
 test('summarizeLoadState counts a never-started chart as pending', () => {
-  // chart 2 has the hydrate default status; it has no entry at all in the
-  // second case
+  // Chart 2 has the starting status 'loading', or is missing from the store.
   const defaultStatus = makeState({
     charts: { 1: { status: 'success' }, 2: { status: 'loading' } },
   });
@@ -160,6 +173,18 @@ test('summarizeLoadState counts a never-started chart as pending', () => {
     failedCharts: 0,
   });
   expect(summarizeLoadState(missing).status).toBe('loading');
+});
+
+test('summarizeLoadState counts null and empty statuses as waiting', () => {
+  const state = makeState({
+    charts: { 1: { status: null }, 2: { status: '' } },
+  });
+  expect(summarizeLoadState(state)).toEqual({
+    status: 'loading',
+    totalCharts: 2,
+    loadedCharts: 0,
+    failedCharts: 0,
+  });
 });
 
 test('summarizeLoadState is partial when a chart failed', () => {
@@ -175,13 +200,16 @@ test('summarizeLoadState is partial when a chart failed', () => {
 });
 
 test('summarizeLoadState is ready when every chart loaded', () => {
+  // 'stopped' (a cancelled query) counts as loaded.
   const state = makeState({
     charts: { 1: { status: 'success' }, 2: { status: 'stopped' } },
   });
   expect(summarizeLoadState(state).status).toBe('ready');
 });
 
-// step 3: advanceTracker
+// Step 3: advanceTracker
+// Each call passes the previous `next` plus a new state, like store updates
+// over time. loadEvent null = no load message to send.
 
 test('advanceTracker emits the status on the first call', () => {
   const { loadEvent } = advanceTracker(
@@ -192,6 +220,7 @@ test('advanceTracker emits the status on the first call', () => {
 });
 
 test('advanceTracker does not emit when only the counts change', () => {
+  // Chart 1 finishes, but chart 2 is still waiting, so it stays 'loading'.
   const first = advanceTracker(
     undefined,
     makeState({ charts: { 1: { status: 'loading' } } }),
@@ -203,7 +232,17 @@ test('advanceTracker does not emit when only the counts change', () => {
   expect(second.loadEvent).toBeNull();
 });
 
+test('advanceTracker reports nothing before the dashboard loads', () => {
+  const { loadEvent, failures } = advanceTracker(
+    undefined,
+    makeState({ hydrated: false, charts: { 1: { status: 'failed' } } }),
+  );
+  expect(loadEvent?.status).toBe('loading');
+  expect(failures).toEqual([]);
+});
+
 test('advanceTracker reports a failed chart only once', () => {
+  // Same state twice: the failure is only sent the first time.
   const failed = makeState({
     charts: {
       1: { status: 'failed', alert: 'Boom' },
@@ -221,20 +260,19 @@ test('advanceTracker reports a failed chart only once', () => {
 });
 
 test('advanceTracker reports a chart again after a reload fails', () => {
+  // Chart 1 fails, re-queries (new start time), then fails again.
   const first = advanceTracker(
     undefined,
     makeState({
       charts: { 1: { status: 'failed', start: 1 }, 2: { status: 'success' } },
     }),
   );
-  // chart 1 re-queries (new start time) ...
   const second = advanceTracker(
     first.next,
     makeState({
       charts: { 1: { status: 'loading', start: 2 }, 2: { status: 'success' } },
     }),
   );
-  // ... and fails again
   const third = advanceTracker(
     second.next,
     makeState({
@@ -248,6 +286,8 @@ test('advanceTracker reports a chart again after a reload fails', () => {
 });
 
 test('advanceTracker does not report the same failure again after switching tabs', () => {
+  // Tab A (chart 1 failed) -> tab B (chart 2 loads) -> back to tab A.
+  // Chart 1 never re-queries, so its failure is only sent once.
   const state = (activeTab: string, chart2Status: string) =>
     makeState({
       layout: tabbedLayout,
@@ -273,6 +313,7 @@ test('advanceTracker does not report the same failure again after switching tabs
 });
 
 test('advanceTracker moves ready to partial when a chart fails after loading', () => {
+  // A chart's data arrives, then it fails while being drawn.
   const ready = advanceTracker(
     undefined,
     makeState({
@@ -292,6 +333,7 @@ test('advanceTracker moves ready to partial when a chart fails after loading', (
 });
 
 test('advanceTracker ignores failures in hidden tabs', () => {
+  // Chart 1 failed, but it's in tab A, which is closed.
   const { loadEvent, failures } = advanceTracker(
     undefined,
     makeState({
@@ -304,7 +346,25 @@ test('advanceTracker ignores failures in hidden tabs', () => {
   expect(failures).toEqual([]);
 });
 
+test('advanceTracker reports a failure in a closed tab once the tab opens', () => {
+  // Chart 1's failure is hidden on tab B, then reported when tab A opens.
+  const charts = { 1: { status: 'failed' }, 2: { status: 'success' } };
+  const onTabB = advanceTracker(
+    undefined,
+    makeState({ layout: tabbedLayout, activeTabs: ['TAB-B'], charts }),
+  );
+  const onTabA = advanceTracker(
+    onTabB.next,
+    makeState({ layout: tabbedLayout, activeTabs: ['TAB-A'], charts }),
+  );
+
+  expect(onTabB.failures).toEqual([]);
+  expect(onTabA.failures.map(f => f.chartId)).toEqual([1]);
+});
+
 test('advanceTracker prefers the layout name and falls back to defaults', () => {
+  // Chart 1: the dashboard name beats the saved name. Chart 2 has no name
+  // and neither has error text, so the fallbacks are used.
   const layout = toLayout([
     chart(1, ['ROOT_ID'], { sliceNameOverride: 'Renamed' }),
     chart(2, ['ROOT_ID']),
@@ -323,43 +383,8 @@ test('advanceTracker prefers the layout name and falls back to defaults', () => 
   ]);
 });
 
-test('summarizeLoadState counts null and empty statuses as waiting', () => {
-  const state = makeState({
-    charts: { 1: { status: null }, 2: { status: '' } },
-  });
-  expect(summarizeLoadState(state)).toEqual({
-    status: 'loading',
-    totalCharts: 2,
-    loadedCharts: 0,
-    failedCharts: 0,
-  });
-});
-
-test('advanceTracker reports nothing before the dashboard loads', () => {
-  const { loadEvent, failures } = advanceTracker(
-    undefined,
-    makeState({ hydrated: false, charts: { 1: { status: 'failed' } } }),
-  );
-  expect(loadEvent?.status).toBe('loading');
-  expect(failures).toEqual([]);
-});
-
-test('advanceTracker reports a failure in a closed tab once the tab opens', () => {
-  const charts = { 1: { status: 'failed' }, 2: { status: 'success' } };
-  const onTabB = advanceTracker(
-    undefined,
-    makeState({ layout: tabbedLayout, activeTabs: ['TAB-B'], charts }),
-  );
-  const onTabA = advanceTracker(
-    onTabB.next,
-    makeState({ layout: tabbedLayout, activeTabs: ['TAB-A'], charts }),
-  );
-
-  expect(onTabB.failures).toEqual([]);
-  expect(onTabA.failures.map(f => f.chartId)).toEqual([1]);
-});
-
 test('advanceTracker does not modify the previous state', () => {
+  // An earlier result must stay unchanged after a later call.
   const first = advanceTracker(
     undefined,
     makeState({
