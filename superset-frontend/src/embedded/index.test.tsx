@@ -436,7 +436,7 @@ test('refresh during pending authentication does not misattribute size evidence'
 
 // Renders the embedded dashboard page component on its own. The real
 // createRoot is used because react-dom/client is mocked for index.tsx's own
-// bootstrap; React is required after jest.resetModules() so the renderer and
+// bootstrap. React is required after jest.resetModules() so the renderer and
 // the component share one React instance. act() runs the component's effects
 // before it returns, so the subscription and first emit exist by the time a
 // test asserts.
