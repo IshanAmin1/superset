@@ -64,7 +64,7 @@ jest.mock('@superset-ui/core', () => ({
   makeApi: () => mockGetMeWithRole,
 }));
 
-// Settings the embedded page reads from the SDK; a test turns features on here.
+// Settings that the embedded page reads from the SDK; a test turns features on here.
 const mockUiConfig = { emitLoadEvents: false };
 jest.mock('src/components/UiConfigContext', () => ({
   useUiConfig: () => mockUiConfig,
