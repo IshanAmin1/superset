@@ -130,6 +130,7 @@ jest.mock('src/components/UiConfigContext', () => ({
     hideChartControls: false,
     emitDataMasks: false,
     showRowLimitWarning: false,
+    emitLoadEvents: false,
   }),
 }));
 
@@ -808,6 +809,7 @@ test('Should render RowCountLabel when row limit is hit, and hide it otherwise',
     hideChartControls: false,
     emitDataMasks: false,
     showRowLimitWarning: true,
+    emitLoadEvents: false,
   });
 
   const { rerender } = render(<SliceHeader {...props} />, {
@@ -844,6 +846,7 @@ test('Should hide warning in embedded by default for non-table charts', () => {
     hideChartControls: false,
     emitDataMasks: false,
     showRowLimitWarning: false,
+    emitLoadEvents: false,
   });
 
   const props = createProps({
@@ -889,6 +892,7 @@ test('Should show row count badge for table chart without server pagination', ()
     hideChartControls: false,
     emitDataMasks: false,
     showRowLimitWarning: true,
+    emitLoadEvents: false,
   });
 
   const props = createProps({
@@ -982,6 +986,7 @@ test('Should show row count warning for table chart with server pagination when 
     hideChartControls: false,
     emitDataMasks: false,
     showRowLimitWarning: true,
+    emitLoadEvents: false,
   });
 
   render(<SliceHeader {...props} />, {
@@ -1038,6 +1043,7 @@ test('Should show row count warning for non-table chart when row limit is reache
     hideChartControls: false,
     emitDataMasks: false,
     showRowLimitWarning: true,
+    emitLoadEvents: false,
   });
 
   render(<SliceHeader {...props} />, {
@@ -1099,6 +1105,7 @@ test('Should show row count warning for ag-grid table chart with server paginati
     hideChartControls: false,
     emitDataMasks: false,
     showRowLimitWarning: true,
+    emitLoadEvents: false,
   });
 
   render(<SliceHeader {...props} />, {
@@ -1160,6 +1167,7 @@ test('Should NOT show row count warning for table chart with server pagination w
     hideChartControls: false,
     emitDataMasks: false,
     showRowLimitWarning: true,
+    emitLoadEvents: false,
   });
 
   render(<SliceHeader {...props} />, {

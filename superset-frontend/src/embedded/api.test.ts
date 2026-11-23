@@ -22,6 +22,7 @@ import {
   FILTER_BAR_BOUNDED_CLASS,
   FILTER_BAR_SCROLL_CLASS,
 } from 'src/dashboard/util/embeddedLayout';
+import { CHART_TYPE } from 'src/dashboard/util/componentTypes';
 
 // Mock factories must build their own jest.fn()s: jest.mock calls are hoisted
 // above this file's declarations, so a factory closing over a const would read
@@ -157,6 +158,47 @@ test('setDataMask queues the mask until the dashboard hydrates', () => {
   expect(mockDispatch).toHaveBeenCalledWith(
     updateDataMask('NATIVE_FILTER-1', nativeFilterMask),
   );
+});
+
+test('getDashboardLoadState reports loading before the dashboard hydrates', () => {
+  mockGetState.mockReturnValue({ dataMask: {} });
+
+  expect(embeddedApi.getDashboardLoadState()).toEqual({
+    status: 'loading',
+    totalCharts: 0,
+    loadedCharts: 0,
+    failedCharts: 0,
+  });
+});
+
+// The status rules are covered in loadTracker.test.ts; this checks the method
+// reads the live store.
+test('getDashboardLoadState summarizes the charts in the store', () => {
+  mockGetState.mockReturnValue({
+    dashboardInfo: { id: 1 },
+    dashboardLayout: {
+      past: [],
+      present: {
+        'CHART-1': {
+          id: 'CHART-1',
+          type: CHART_TYPE,
+          parents: ['ROOT_ID', 'GRID_ID'],
+          children: [],
+          meta: { chartId: 1 },
+        },
+      },
+      future: [],
+    },
+    dashboardState: { activeTabs: [] },
+    charts: { 1: { id: 1, chartStatus: 'success' } },
+  });
+
+  expect(embeddedApi.getDashboardLoadState()).toEqual({
+    status: 'ready',
+    totalCharts: 1,
+    loadedCharts: 1,
+    failedCharts: 0,
+  });
 });
 
 // jsdom does no layout, so the geometry is stubbed. The markers are the same

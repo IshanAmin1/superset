@@ -19,6 +19,7 @@
 // Mark this file as a module so its top-level declarations stay file-scoped
 // (the file has no imports; modules are loaded via require() inside tests).
 import { TextEncoder } from 'util';
+import { CHART_TYPE } from 'src/dashboard/util/componentTypes';
 
 Object.assign(global, { TextEncoder });
 
@@ -63,13 +64,21 @@ jest.mock('@superset-ui/core', () => ({
   makeApi: () => mockGetMeWithRole,
 }));
 
+// Settings the embedded page reads from the SDK; a test turns features on here.
+const mockUiConfig = { emitLoadEvents: false };
 jest.mock('src/components/UiConfigContext', () => ({
-  useUiConfig: () => ({}),
+  useUiConfig: () => mockUiConfig,
+}));
+
+// The dashboard page itself is not under test; render nothing in its place.
+jest.mock('src/utils/lazyWithRetry', () => ({
+  lazyWithRetry: () => () => null,
 }));
 
 // Capture the guestToken handler that start() is wired to, so tests can
 // re-trigger the handshake and assert the retry behavior.
 const mockSwitchboardInit = jest.fn();
+const mockEmit = jest.fn();
 const mockSwitchboard = {
   handler: undefined as ((arg: { guestToken: string }) => void) | undefined,
 };
@@ -83,18 +92,25 @@ jest.mock('@superset-ui/switchboard', () => ({
         mockSwitchboard.handler = fn;
       }
     },
-    emit: jest.fn(),
+    emit: mockEmit,
   },
 }));
 
 const mockSetupClient = jest.fn();
 jest.mock('src/setup/setupClient', () => mockSetupClient, { virtual: true });
 
+// The store's state is swapped per test; `mockSubscribe` keeps the listeners
+// so a test can play a store update.
+const mockStoreState: { current: Record<string, unknown> } = {
+  current: { dataMask: {} },
+};
+const mockUnsubscribe = jest.fn();
+const mockSubscribe = jest.fn((_listener: () => void) => mockUnsubscribe);
 jest.mock('src/views/store', () => ({
   store: {
     dispatch: jest.fn(),
-    getState: () => ({ dataMask: {} }),
-    subscribe: jest.fn(),
+    getState: () => mockStoreState.current,
+    subscribe: mockSubscribe,
   },
   USER_LOADED: 'USER_LOADED',
 }));
@@ -117,6 +133,12 @@ jest.mock('./api', () => ({ embeddedApi: {} }));
 jest.mock('./originValidation', () => ({ validateMessageEvent: () => true }));
 
 jest.mock('./utils', () => ({ getDataMaskChangeTrigger: () => ({}) }));
+
+// The real tracker, wrapped so a test can see whether a store change ran it.
+jest.mock('./loadTracker', () => {
+  const actual = jest.requireActual('./loadTracker');
+  return { ...actual, advanceTracker: jest.fn(actual.advanceTracker) };
+});
 
 jest.mock('react-dom/client', () => ({
   createRoot: () => ({ render: jest.fn(), unmount: jest.fn() }),
@@ -169,6 +191,11 @@ beforeEach(() => {
   mockLogging.error.mockClear();
   mockGetMeWithRole.mockReset();
   mockGetMeWithRole.mockResolvedValue({ result: { roles: {} } });
+  mockUiConfig.emitLoadEvents = false;
+  mockStoreState.current = { dataMask: {} };
+  mockSubscribe.mockClear();
+  mockUnsubscribe.mockClear();
+  mockEmit.mockClear();
   document.body.innerHTML = '<div id="app"></div>';
 });
 
@@ -398,6 +425,131 @@ test('refresh during pending authentication does not misattribute size evidence'
   mockSwitchboard.handler!({ guestToken: 'retry' });
   await flush();
   expect(mockGetMeWithRole).toHaveBeenCalledTimes(2);
+});
+
+// Renders the embedded dashboard page component on its own. The real
+// createRoot is used because react-dom/client is mocked for index.tsx's own
+// bootstrap; React is required after jest.resetModules() so the renderer and
+// the component share one React instance.
+async function renderEmbeddedPage() {
+  const { EmbeddedLazyDashboardPage } = require('./index');
+  await flush();
+  const { act, createElement } = require('react');
+  const { createRoot } = jest.requireActual('react-dom/client');
+  const root = createRoot(document.createElement('div'));
+  act(() => {
+    root.render(createElement(EmbeddedLazyDashboardPage));
+  });
+  return {
+    unmount: () =>
+      act(() => {
+        root.unmount();
+      }),
+  };
+}
+
+// A hydrated dashboard without tabs holding chart 1, which failed.
+const failedDashboardState = {
+  dataMask: {},
+  dashboardInfo: { id: 10 },
+  dashboardLayout: {
+    past: [],
+    present: {
+      'CHART-1': {
+        id: 'CHART-1',
+        type: CHART_TYPE,
+        parents: ['ROOT_ID', 'GRID_ID'],
+        children: [],
+        meta: { chartId: 1, sliceName: 'Sales' },
+      },
+    },
+    future: [],
+  },
+  dashboardState: { activeTabs: [] },
+  charts: {
+    1: {
+      id: 1,
+      chartStatus: 'failed',
+      chartAlert: 'boom',
+      chartUpdateStartTime: 100,
+    },
+  },
+  sliceEntities: { slices: {} },
+};
+
+// Plays a store update to every listener the page subscribed.
+function notifyStore() {
+  mockSubscribe.mock.calls.forEach(([listener]) => listener());
+}
+
+beforeAll(() => {
+  // The page is rendered with React's own act(), outside Testing Library.
+  (
+    globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+  ).IS_REACT_ACT_ENVIRONMENT = true;
+});
+
+test('sends no load events when emitLoadEvents is off', async () => {
+  await renderEmbeddedPage();
+
+  expect(mockSubscribe).not.toHaveBeenCalled();
+  expect(mockEmit).not.toHaveBeenCalled();
+});
+
+test('sends load status changes and chart failures when emitLoadEvents is on', async () => {
+  mockUiConfig.emitLoadEvents = true;
+  await renderEmbeddedPage();
+
+  // The starting status goes out right away, before any store change.
+  expect(mockEmit.mock.calls).toEqual([
+    [
+      'observeDashboardLoad',
+      { status: 'loading', totalCharts: 0, loadedCharts: 0, failedCharts: 0 },
+    ],
+  ]);
+
+  mockEmit.mockClear();
+  mockStoreState.current = failedDashboardState;
+  notifyStore();
+
+  expect(mockEmit.mock.calls).toEqual([
+    [
+      'observeDashboardLoad',
+      { status: 'partial', totalCharts: 1, loadedCharts: 0, failedCharts: 1 },
+    ],
+    [
+      'observeChartFailure',
+      { chartId: 1, chartName: 'Sales', errorMessage: 'boom' },
+    ],
+  ]);
+});
+
+test('ignores store changes that do not touch the charts, layout, tabs or dashboard', async () => {
+  mockUiConfig.emitLoadEvents = true;
+  mockStoreState.current = failedDashboardState;
+  await renderEmbeddedPage();
+  // Same module registry as the page, so this is the spy the page calls.
+  const { advanceTracker } = require('./loadTracker');
+  advanceTracker.mockClear();
+
+  // Only the filters change; every slice the tracker reads is the same object.
+  mockStoreState.current = {
+    ...failedDashboardState,
+    dataMask: { 'NATIVE_FILTER-1': {} },
+  };
+  notifyStore();
+
+  expect(advanceTracker).not.toHaveBeenCalled();
+});
+
+test('stops listening to the store when the page is removed', async () => {
+  mockUiConfig.emitLoadEvents = true;
+  const { unmount } = await renderEmbeddedPage();
+  expect(mockUnsubscribe).not.toHaveBeenCalled();
+
+  unmount();
+
+  expect(mockUnsubscribe).toHaveBeenCalledTimes(1);
 });
 
 test('Switchboard does not log credential-bearing message bodies', async () => {
