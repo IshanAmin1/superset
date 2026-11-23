@@ -38,7 +38,7 @@ import { setupAGGridModules } from '@superset-ui/core/components/ThemedAgGridRea
 import setupClient from 'src/setup/setupClient';
 import { connectRealtime } from 'src/middleware/realtime';
 import { useUiConfig } from 'src/components/UiConfigContext';
-import { store, USER_LOADED } from 'src/views/store';
+import { store, USER_LOADED, type RootState } from 'src/views/store';
 import { Loading } from '@superset-ui/core/components';
 import { ErrorBoundary } from 'src/components';
 import { addDangerToast } from 'src/components/MessageToasts/actions';
@@ -50,6 +50,7 @@ import {
 } from './EmbeddedContextProviders';
 import { embeddedApi } from './api';
 import { getDataMaskChangeTrigger } from './utils';
+import { advanceTracker, type TrackerState } from './loadTracker';
 import { validateMessageEvent } from './originValidation';
 import {
   measureGuestToken,
@@ -110,9 +111,10 @@ const LazyDashboardPage = lazyWithRetry(
     ),
 );
 
-const EmbeddedLazyDashboardPage = () => {
+export const EmbeddedLazyDashboardPage = () => {
   const uiConfig = useUiConfig();
   const emitDataMasks = uiConfig?.emitDataMasks;
+  const emitLoadEvents = uiConfig?.emitLoadEvents;
 
   // Emit data mask changes to the parent window. Subscribing inside an effect
   // (rather than during render) ensures the unsubscribe runs on unmount,
@@ -134,6 +136,44 @@ const EmbeddedLazyDashboardPage = () => {
       }
     });
   }, [emitDataMasks]);
+
+  // Emit dashboard load status changes and chart failures to the parent window.
+  useEffect(() => {
+    if (!emitLoadEvents) return undefined;
+    log('setting up Switchboard load event emitter');
+
+    let tracker: TrackerState | undefined;
+    let previousState: RootState | undefined;
+
+    const emitLoadChanges = () => {
+      const state = store.getState();
+      // Skip store changes that cannot affect the load state.
+      if (
+        previousState &&
+        previousState.charts === state.charts &&
+        previousState.dashboardLayout === state.dashboardLayout &&
+        previousState.dashboardState?.activeTabs ===
+          state.dashboardState?.activeTabs &&
+        previousState.dashboardInfo?.id === state.dashboardInfo?.id
+      ) {
+        return;
+      }
+      previousState = state;
+
+      const { next, loadEvent, failures } = advanceTracker(tracker, state);
+      tracker = next;
+      if (loadEvent) {
+        Switchboard.emit('observeDashboardLoad', loadEvent);
+      }
+      failures.forEach(failure => {
+        Switchboard.emit('observeChartFailure', failure);
+      });
+    };
+
+    // Send the starting status right away, then follow the store.
+    emitLoadChanges();
+    return store.subscribe(emitLoadChanges);
+  }, [emitLoadEvents]);
 
   return <LazyDashboardPage idOrSlug={bootstrapData.embedded!.dashboard_id} />;
 };
@@ -324,6 +364,10 @@ window.addEventListener('message', function embeddedPageInitializer(event) {
     Switchboard.defineMethod('getActiveTabs', embeddedApi.getActiveTabs);
     Switchboard.defineMethod('getDataMask', embeddedApi.getDataMask);
     Switchboard.defineMethod('getChartStates', embeddedApi.getChartStates);
+    Switchboard.defineMethod(
+      'getDashboardLoadState',
+      embeddedApi.getDashboardLoadState,
+    );
     Switchboard.defineMethod('setDataMask', embeddedApi.setDataMask);
     Switchboard.defineMethod(
       'getChartDataPayloads',
