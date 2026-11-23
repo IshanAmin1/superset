@@ -76,11 +76,13 @@ jest.mock('src/utils/lazyWithRetry', () => ({
 }));
 
 // Capture the guestToken handler that start() is wired to, so tests can
-// re-trigger the handshake and assert the retry behavior.
+// re-trigger the handshake and assert the retry behavior. `methods` keeps
+// every method the handshake registers.
 const mockSwitchboardInit = jest.fn();
 const mockEmit = jest.fn();
 const mockSwitchboard = {
   handler: undefined as ((arg: { guestToken: string }) => void) | undefined,
+  methods: {} as Record<string, unknown>,
 };
 jest.mock('@superset-ui/switchboard', () => ({
   __esModule: true,
@@ -88,6 +90,7 @@ jest.mock('@superset-ui/switchboard', () => ({
     init: mockSwitchboardInit,
     start: jest.fn(),
     defineMethod: (name: string, fn: (arg: { guestToken: string }) => void) => {
+      mockSwitchboard.methods[name] = fn;
       if (name === 'guestToken') {
         mockSwitchboard.handler = fn;
       }
@@ -128,7 +131,10 @@ jest.mock('./EmbeddedContextProviders', () => ({
   getThemeController: () => null,
 }));
 
-jest.mock('./api', () => ({ embeddedApi: {} }));
+const mockGetDashboardLoadState = jest.fn();
+jest.mock('./api', () => ({
+  embeddedApi: { getDashboardLoadState: mockGetDashboardLoadState },
+}));
 
 jest.mock('./originValidation', () => ({ validateMessageEvent: () => true }));
 
@@ -186,6 +192,7 @@ function sendHandshake() {
 beforeEach(() => {
   jest.resetModules();
   mockSwitchboard.handler = undefined;
+  mockSwitchboard.methods = {};
   mockSetupPlugins.mockReset();
   mockSetupAGGridModules.mockReset();
   mockLogging.error.mockClear();
@@ -542,6 +549,32 @@ test('ignores store changes that do not touch the charts, layout, tabs or dashbo
   expect(advanceTracker).not.toHaveBeenCalled();
 });
 
+// Each slice the tracker reads must, on its own, be enough to run it again:
+// a chart finishing changes only `charts`, a tab switch only `activeTabs`.
+test.each([
+  ['charts', { charts: { ...failedDashboardState.charts } }],
+  [
+    'layout',
+    { dashboardLayout: { ...failedDashboardState.dashboardLayout } },
+  ],
+  ['open tabs', { dashboardState: { activeTabs: ['TAB-1'] } }],
+  ['dashboard id', { dashboardInfo: { id: 11 } }],
+])(
+  'runs the tracker when only the %s change',
+  async (_slice, changedSlice) => {
+    mockUiConfig.emitLoadEvents = true;
+    mockStoreState.current = failedDashboardState;
+    await renderEmbeddedPage();
+    const { advanceTracker } = require('./loadTracker');
+    advanceTracker.mockClear();
+
+    mockStoreState.current = { ...failedDashboardState, ...changedSlice };
+    notifyStore();
+
+    expect(advanceTracker).toHaveBeenCalledTimes(1);
+  },
+);
+
 test('stops listening to the store when the page is removed', async () => {
   mockUiConfig.emitLoadEvents = true;
   const { unmount } = await renderEmbeddedPage();
@@ -550,6 +583,18 @@ test('stops listening to the store when the page is removed', async () => {
   unmount();
 
   expect(mockUnsubscribe).toHaveBeenCalledTimes(1);
+});
+
+// Hosts call this to read the load state, and a failed call is how they tell
+// that a Superset version predates load events.
+test('registers getDashboardLoadState on the message channel', async () => {
+  require('./index');
+  await flush();
+  sendHandshake();
+
+  expect(mockSwitchboard.methods.getDashboardLoadState).toBe(
+    mockGetDashboardLoadState,
+  );
 });
 
 test('Switchboard does not log credential-bearing message bodies', async () => {
