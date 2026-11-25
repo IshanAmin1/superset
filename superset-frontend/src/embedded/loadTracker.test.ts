@@ -161,18 +161,28 @@ test('summarizeLoadState is ready with no visible charts', () => {
 });
 
 test('summarizeLoadState counts a never-started chart as pending', () => {
-  // Chart 2 has the starting status 'loading', or is missing from the store.
-  const defaultStatus = makeState({
+  // Chart 2 still has the starting status 'loading'.
+  const state = makeState({
     charts: { 1: { status: 'success' }, 2: { status: 'loading' } },
   });
-  const missing = makeState({ charts: { 1: { status: 'success' } } });
-  expect(summarizeLoadState(defaultStatus)).toEqual({
+  expect(summarizeLoadState(state)).toEqual({
     status: 'loading',
     totalCharts: 2,
     loadedCharts: 1,
     failedCharts: 0,
   });
-  expect(summarizeLoadState(missing).status).toBe('loading');
+});
+
+test('summarizeLoadState skips a layout chart missing from the store', () => {
+  // Chart 2 is in the layout but has no chart entry, like a deleted chart.
+  // It will never load, so it must not hold the dashboard at 'loading'.
+  const state = makeState({ charts: { 1: { status: 'success' } } });
+  expect(summarizeLoadState(state)).toEqual({
+    status: 'ready',
+    totalCharts: 1,
+    loadedCharts: 1,
+    failedCharts: 0,
+  });
 });
 
 test('summarizeLoadState counts null and empty statuses as waiting', () => {
@@ -223,11 +233,15 @@ test('advanceTracker does not emit when only the counts change', () => {
   // Chart 1 finishes, but chart 2 is still waiting, so it stays 'loading'.
   const first = advanceTracker(
     undefined,
-    makeState({ charts: { 1: { status: 'loading' } } }),
+    makeState({
+      charts: { 1: { status: 'loading' }, 2: { status: 'loading' } },
+    }),
   );
   const second = advanceTracker(
     first.next,
-    makeState({ charts: { 1: { status: 'success' } } }),
+    makeState({
+      charts: { 1: { status: 'success' }, 2: { status: 'loading' } },
+    }),
   );
   expect(second.loadEvent).toBeNull();
 });
