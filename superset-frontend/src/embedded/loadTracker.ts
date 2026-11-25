@@ -115,11 +115,19 @@ export function getVisibleChartIds(
   return Array.from(chartIds);
 }
 
-/** Reads the layout and open tabs from the store and returns the visible chart ids. */
+/**
+ * Reads the layout and open tabs from the store and returns the visible chart
+ * ids. Charts with no entry in `state.charts` are left out: the layout and the
+ * chart entries arrive together when the dashboard loads, so a layout chart
+ * without an entry will never load and would keep the dashboard at 'loading'
+ * forever.
+ */
 function getVisibleCharts(state: LoadTrackerInput): number[] {
   const layout = state.dashboardLayout?.present ?? {};
   const activeTabs = state.dashboardState?.activeTabs ?? [];
-  return getVisibleChartIds(layout, activeTabs);
+  return getVisibleChartIds(layout, activeTabs).filter(
+    chartId => state.charts?.[chartId] !== undefined,
+  );
 }
 
 /** Counts the visible charts and works out the dashboard status. */

@@ -29,6 +29,7 @@ interface UiConfigType {
   // superset-embedded-sdk specific
   emitDataMasks: boolean; // emit data masks to the parent window
   showRowLimitWarning: boolean; // show the row limit warning
+  emitLoadEvents: boolean; // emit dashboard load events to the parent window
 }
 interface EmbeddedUiConfigProviderProps {
   children: JSX.Element;
@@ -41,6 +42,7 @@ export const UiConfigContext = createContext<UiConfigType>({
   hideChartControls: false,
   emitDataMasks: false,
   showRowLimitWarning: false,
+  emitLoadEvents: false,
 });
 
 export const useUiConfig = () => useContext(UiConfigContext);
@@ -56,6 +58,7 @@ export const EmbeddedUiConfigProvider: FC<EmbeddedUiConfigProviderProps> = ({
     hideChartControls: (config & 8) !== 0,
     emitDataMasks: (config & 16) !== 0,
     showRowLimitWarning: (config & 32) !== 0,
+    emitLoadEvents: (config & 64) !== 0,
   });
 
   return (

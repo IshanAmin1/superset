@@ -30,6 +30,7 @@ import { getDashboardPermalink as getDashboardPermalinkUtil } from '../utils/url
 import { DashboardChartStates } from '../dashboard/types/chartState';
 import { hasStatefulCharts } from '../dashboard/util/chartStateConverter';
 import { getChartDataPayloads as getChartDataPayloadsUtil } from './utils';
+import { DashboardLoadState, summarizeLoadState } from './loadTracker';
 import { updateDataMask } from '../dataMask/actions';
 import { releaseFilterKeyPublish } from '../dashboard/util/sharedFilterStateHold';
 
@@ -46,6 +47,7 @@ type EmbeddedSupersetApi = {
   getActiveTabs: () => string[];
   getDataMask: () => DataMaskStateWithId;
   getChartStates: () => DashboardChartStates;
+  getDashboardLoadState: () => DashboardLoadState;
   getChartDataPayloads: (params?: {
     chartId?: number;
   }) => Promise<Record<string, JsonObject>>;
@@ -197,6 +199,11 @@ const setDataMask = ({ dataMask }: { dataMask: DataMaskStateWithId }) => {
 const getChartStates = () =>
   store?.getState()?.dashboardState?.chartStates || {};
 
+// Works whether or not the emitLoadEvents setting is on, so hosts can also
+// call it to check that this Superset version supports load events.
+const getDashboardLoadState = (): DashboardLoadState =>
+  summarizeLoadState(store.getState());
+
 const getChartDataPayloads = async (params?: {
   chartId?: number;
 }): Promise<Record<string, JsonObject>> => {
@@ -212,6 +219,7 @@ export const embeddedApi: EmbeddedSupersetApi = {
   getActiveTabs,
   getDataMask,
   getChartStates,
+  getDashboardLoadState,
   getChartDataPayloads,
   setDataMask,
 };
