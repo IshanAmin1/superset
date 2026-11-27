@@ -626,4 +626,155 @@ describe("embedDashboard", () => {
     );
     dashboard.unmount();
   });
+
+  // the handler the sdk registered on a switchboard under `name`, so a test
+  // can call it the way a message from the iframe would
+  function definedMethod(switchboard: Switchboard, name: string) {
+    const call = vi
+      .mocked(switchboard.defineMethod)
+      .mock.calls.find(([defined]) => defined === name);
+    return call?.[1] as (args: unknown) => unknown;
+  }
+
+  const readyState = {
+    status: "ready",
+    totalCharts: 3,
+    loadedCharts: 3,
+    failedCharts: 0,
+  } as const;
+
+  test("emitLoadEvents puts bit 64 in the iframe url", async () => {
+    const dashboard = await embedDashboard({
+      id: "test-id",
+      supersetDomain: "https://superset.example.com",
+      mountPoint,
+      fetchGuestToken: vi.fn().mockResolvedValue(fakeToken()),
+      dashboardUiConfig: { emitLoadEvents: true },
+    });
+
+    const iframe = mountPoint.querySelector("iframe")!;
+    expect(new URL(iframe.src).searchParams.get("uiConfig")).toBe("64");
+    dashboard.unmount();
+  });
+
+  test("emitLoadEvents adds up with the other ui settings", async () => {
+    const dashboard = await embedDashboard({
+      id: "test-id",
+      supersetDomain: "https://superset.example.com",
+      mountPoint,
+      fetchGuestToken: vi.fn().mockResolvedValue(fakeToken()),
+      dashboardUiConfig: { hideTitle: true, emitLoadEvents: true },
+    });
+
+    // hideTitle is 1, so 1 + 64
+    const iframe = mountPoint.querySelector("iframe")!;
+    expect(new URL(iframe.src).searchParams.get("uiConfig")).toBe("65");
+    dashboard.unmount();
+  });
+
+  test("observeDashboardLoad hands the host each load state the iframe sends", async () => {
+    const observer = vi.fn();
+    const dashboard = await embedDashboard({
+      id: "test-id",
+      supersetDomain: "https://superset.example.com",
+      mountPoint,
+      fetchGuestToken: vi.fn().mockResolvedValue(fakeToken()),
+      dashboardUiConfig: { emitLoadEvents: true },
+    });
+    dashboard.observeDashboardLoad(observer);
+
+    // the iframe sends a load message over the channel
+    definedMethod(mockSwitchboard, "observeDashboardLoad")(readyState);
+
+    expect(observer).toHaveBeenCalledWith(readyState);
+    dashboard.unmount();
+  });
+
+  test("observeChartFailure hands the host each failed chart", async () => {
+    const observer = vi.fn();
+    const failure = {
+      chartId: 42,
+      chartName: "Sales by region",
+      errorMessage: "Query timed out",
+    };
+    const dashboard = await embedDashboard({
+      id: "test-id",
+      supersetDomain: "https://superset.example.com",
+      mountPoint,
+      fetchGuestToken: vi.fn().mockResolvedValue(fakeToken()),
+      dashboardUiConfig: { emitLoadEvents: true },
+    });
+    dashboard.observeChartFailure(observer);
+
+    definedMethod(mockSwitchboard, "observeChartFailure")(failure);
+
+    expect(observer).toHaveBeenCalledWith(failure);
+    dashboard.unmount();
+  });
+
+  test("reload keeps the load callbacks working on the new port", async () => {
+    const mockFetchGuestToken = vi.fn().mockResolvedValue(fakeToken());
+    const loadObserver = vi.fn();
+    const failureObserver = vi.fn();
+    const dashboard = await embedDashboard({
+      id: "test-id",
+      supersetDomain: "https://superset.example.com",
+      mountPoint,
+      fetchGuestToken: mockFetchGuestToken,
+      dashboardUiConfig: { emitLoadEvents: true },
+    });
+    dashboard.observeDashboardLoad(loadObserver);
+    dashboard.observeChartFailure(failureObserver);
+
+    reload();
+    await vi.waitFor(() =>
+      expect(mockFetchGuestToken).toHaveBeenCalledTimes(2),
+    );
+
+    // the reloaded document talks to the second switchboard, not the first
+    const failure = { chartId: 7, chartName: "Costs", errorMessage: "Error" };
+    definedMethod(switchboards[1], "observeDashboardLoad")(readyState);
+    definedMethod(switchboards[1], "observeChartFailure")(failure);
+
+    expect(loadObserver).toHaveBeenCalledWith(readyState);
+    expect(failureObserver).toHaveBeenCalledWith(failure);
+    dashboard.unmount();
+  });
+
+  test("getDashboardLoadState resolves to the state the iframe answers with", async () => {
+    vi.mocked(mockSwitchboard.get).mockResolvedValue(readyState);
+    const dashboard = await embedDashboard({
+      id: "test-id",
+      supersetDomain: "https://superset.example.com",
+      mountPoint,
+      fetchGuestToken: vi.fn().mockResolvedValue(fakeToken()),
+    });
+
+    await expect(dashboard.getDashboardLoadState()).resolves.toEqual(
+      readyState,
+    );
+    expect(mockSwitchboard.get).toHaveBeenCalledWith(
+      "getDashboardLoadState",
+      undefined,
+    );
+    dashboard.unmount();
+  });
+
+  test("getDashboardLoadState rejects when the embedded page does not support it", async () => {
+    // what an older superset answers, it has never heard of the method
+    vi.mocked(mockSwitchboard.get).mockRejectedValue(
+      new Error('Method "getDashboardLoadState" is not defined'),
+    );
+    const dashboard = await embedDashboard({
+      id: "test-id",
+      supersetDomain: "https://superset.example.com",
+      mountPoint,
+      fetchGuestToken: vi.fn().mockResolvedValue(fakeToken()),
+    });
+
+    await expect(dashboard.getDashboardLoadState()).rejects.toThrow(
+      'Method "getDashboardLoadState" is not defined',
+    );
+    dashboard.unmount();
+  });
 });
