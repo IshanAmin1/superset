@@ -68,6 +68,11 @@ under the License.
         if (params.get('hideTitle') === 'true') uiConfig.hideTitle = true;
         if (params.get('hideTab') === 'true') uiConfig.hideTab = true;
         if (params.get('hideChartControls') === 'true') uiConfig.hideChartControls = true;
+        if (params.get('emitLoadEvents') === 'true') uiConfig.emitLoadEvents = true;
+
+        // Load events the SDK delivers, read by Playwright assertions
+        window.__loadEvents = [];
+        window.__chartFailures = [];
 
         const dashboard = await supersetEmbeddedSdk.embedDashboard({
           id: uuid,
@@ -76,6 +81,16 @@ under the License.
           fetchGuestToken: fetchGuestToken,
           dashboardUiConfig: Object.keys(uiConfig).length > 0 ? uiConfig : undefined,
           debug: params.get('debug') === 'true',
+        });
+
+        // Registered right after embedDashboard resolves: the iframe only
+        // starts sending once the dashboard has loaded, so nothing is missed.
+        // With emitLoadEvents off the iframe sends nothing and these stay empty.
+        dashboard.observeDashboardLoad(function (loadState) {
+          window.__loadEvents.push(loadState);
+        });
+        dashboard.observeChartFailure(function (failure) {
+          window.__chartFailures.push(failure);
         });
 
         statusEl.textContent = 'Dashboard embedded successfully';

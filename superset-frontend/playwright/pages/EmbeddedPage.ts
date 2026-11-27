@@ -20,6 +20,30 @@
 import { Page, FrameLocator, Locator, expect } from '@playwright/test';
 import { EMBEDDED } from '../utils/constants';
 
+/** What the SDK sends to observeDashboardLoad (mirrors the SDK's DashboardLoadState). */
+export interface DashboardLoadState {
+  status: 'loading' | 'ready' | 'partial';
+  totalCharts: number;
+  loadedCharts: number;
+  failedCharts: number;
+}
+
+/** What the SDK sends to observeChartFailure (mirrors the SDK's ChartFailure). */
+export interface ChartFailure {
+  chartId: number;
+  chartName: string;
+  errorMessage: string;
+}
+
+/** Globals the test app sets up for load events (see embedded-app/index.html). */
+type LoadEventsWindow = {
+  __loadEvents?: DashboardLoadState[];
+  __chartFailures?: ChartFailure[];
+  __embeddedDashboard?: {
+    getDashboardLoadState: () => Promise<DashboardLoadState>;
+  };
+};
+
 /**
  * Page object for the embedded dashboard test app.
  *
@@ -63,6 +87,7 @@ export class EmbeddedPage {
     hideTitle?: boolean;
     hideTab?: boolean;
     hideChartControls?: boolean;
+    emitLoadEvents?: boolean;
     debug?: boolean;
   }): Promise<void> {
     const searchParams = new URLSearchParams({
@@ -72,6 +97,7 @@ export class EmbeddedPage {
     if (params.hideTitle) searchParams.set('hideTitle', 'true');
     if (params.hideTab) searchParams.set('hideTab', 'true');
     if (params.hideChartControls) searchParams.set('hideChartControls', 'true');
+    if (params.emitLoadEvents) searchParams.set('emitLoadEvents', 'true');
     if (params.debug) searchParams.set('debug', 'true');
 
     await this.page.goto(`${params.appUrl}/?${searchParams.toString()}`);
@@ -182,6 +208,36 @@ export class EmbeddedPage {
       (await this.page.locator(EmbeddedPage.SELECTORS.STATUS).textContent()) ??
       ''
     );
+  }
+
+  /**
+   * Load states the host received through observeDashboardLoad, oldest first.
+   */
+  async getLoadEvents(): Promise<DashboardLoadState[]> {
+    return this.page.evaluate(
+      () => (window as unknown as LoadEventsWindow).__loadEvents ?? [],
+    );
+  }
+
+  /**
+   * Chart failures the host received through observeChartFailure.
+   */
+  async getChartFailures(): Promise<ChartFailure[]> {
+    return this.page.evaluate(
+      () => (window as unknown as LoadEventsWindow).__chartFailures ?? [],
+    );
+  }
+
+  /**
+   * Ask the embedded dashboard for its load state through the SDK.
+   */
+  async getDashboardLoadState(): Promise<DashboardLoadState> {
+    return this.page.evaluate(() => {
+      const dashboard = (window as unknown as LoadEventsWindow)
+        .__embeddedDashboard;
+      if (!dashboard) throw new Error('Dashboard has not been embedded yet');
+      return dashboard.getDashboardLoadState();
+    });
   }
 
   /**
