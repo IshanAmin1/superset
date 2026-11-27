@@ -49,7 +49,7 @@ embedDashboard({
   mountPoint: document.getElementById("my-superset-container"), // any html element that can contain an iframe
   fetchGuestToken: () => fetchGuestTokenFromBackend(),
   dashboardUiConfig: {
-    // dashboard UI config: hideTitle, hideTab, hideChartControls, filters.visible, filters.expanded (optional), urlParams (optional)
+    // dashboard UI config: hideTitle, hideTab, hideChartControls, emitLoadEvents, filters.visible, filters.expanded (optional), urlParams (optional)
     hideTitle: true,
     filters: {
       expanded: true,
@@ -257,3 +257,86 @@ embedDashboard({
   },
 });
 ```
+
+## Listening for Dashboard Load Events
+
+Your app can find out when the charts in an embedded dashboard have finished loading, or have failed, without having to keep asking. Turn on `emitLoadEvents`, then register callbacks on the object `embedDashboard` returns:
+
+```js
+const dashboard = await embedDashboard({
+  id: "abc123",
+  supersetDomain: "https://superset.example.com",
+  mountPoint: document.getElementById("my-superset-container"),
+  fetchGuestToken: () => fetchGuestTokenFromBackend(),
+  dashboardUiConfig: {
+    emitLoadEvents: true,
+  },
+});
+
+// Register the callbacks right after embedDashboard resolves
+dashboard.observeDashboardLoad((loadState) => {
+  // loadState: { status, totalCharts, loadedCharts, failedCharts }
+  if (loadState.status === "loading") {
+    return;
+  }
+  hideSpinner();
+  if (loadState.status === "partial") {
+    showWarning(`${loadState.failedCharts} chart(s) failed to load`);
+  }
+});
+
+dashboard.observeChartFailure(({ chartId, chartName, errorMessage }) => {
+  reportError(`Chart ${chartId} (${chartName}): ${errorMessage}`);
+});
+```
+
+`hideSpinner`, `showWarning` and `reportError` stand in for your own code.
+
+### Dashboard status
+
+`observeDashboardLoad` receives the dashboard's status, along with how many charts there are and how many have loaded or failed:
+
+| `status`  | Meaning                                                                         |
+| --------- | ------------------------------------------------------------------------------- |
+| `loading` | The dashboard has not finished loading, or at least one chart is still waiting  |
+| `partial` | Every chart has finished and at least one failed                                |
+| `ready`   | Every chart has finished and none failed (also when the open tab has no charts) |
+
+Only the charts in the tab or tabs the user is looking at are counted. Charts in other tabs are ignored until the user opens that tab. A dashboard without tabs counts every chart. A chart whose query was cancelled counts as loaded.
+
+### When the callbacks are called
+
+- `observeDashboardLoad` is called when the status changes, for example from `loading` to `ready`. Going from 3 of 10 charts loaded to 4 of 10 does not call it. Use `getDashboardLoadState()` for the latest counts.
+- `observeChartFailure` is called once for each failed chart query, with the chart's `chartId`, its `chartName` as shown on the dashboard and the `errorMessage` shown on the chart. A chart that is reloaded and fails again is reported again.
+- When a chart fails while the dashboard is being drawn, the status changes from `ready` to `partial` and the failure is reported.
+- Register the callbacks right after `embedDashboard` resolves. A message that arrives before its callback is registered is dropped.
+- If the dashboard navigates to a page of its own and reloads the iframe, your callbacks keep working. Calling `observeDashboardLoad` or `observeChartFailure` again replaces the earlier callback.
+
+### Reading the current state
+
+`getDashboardLoadState()` returns the same object `observeDashboardLoad` receives, as it is at that moment:
+
+```js
+const loadState = await dashboard.getDashboardLoadState();
+// { status: "loading", totalCharts: 10, loadedCharts: 3, failedCharts: 0 }
+```
+
+It works whether or not `emitLoadEvents` is on. Superset versions that predate load events do not know the method, so the call is rejected with an error. Your app can use that to check whether the Superset it embeds supports this feature:
+
+```js
+async function supportsLoadEvents(dashboard) {
+  try {
+    await dashboard.getDashboardLoadState();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+if (!(await supportsLoadEvents(dashboard))) {
+  // older Superset: no events, so fall back to a fixed wait
+  setTimeout(hideSpinner, 8000);
+}
+```
+
+The call is also rejected if the iframe navigates away before it answers.

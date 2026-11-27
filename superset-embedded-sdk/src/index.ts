@@ -55,6 +55,8 @@ export type UiConfigType = {
     [key: string]: any;
   };
   showRowLimitWarning?: boolean;
+  /** send load events to the host, see observeDashboardLoad */
+  emitLoadEvents?: boolean;
 };
 
 /** Default per-call timeout (ms) applied to the host `fetchGuestToken` callback. */
@@ -118,6 +120,46 @@ export type ObserveDataMaskCallbackFn = (
     nativeFiltersChanged: boolean;
   },
 ) => void;
+/**
+ * Load status of the charts in the open tab(s).
+ * loading = still waiting, partial = done but some failed, ready = all loaded
+ * Copy of the type in superset-frontend/src/embedded/loadTracker.ts,
+ * the sdk can't import frontend code so keep both in sync. If a status is
+ * added there, add it here too.
+ */
+export type DashboardLoadStatus = "loading" | "ready" | "partial";
+
+/**
+ * What observeDashboardLoad gets and getDashboardLoadState returns.
+ * Copy of the type in superset-frontend/src/embedded/loadTracker.ts,
+ * the sdk can't import frontend code so keep both in sync.
+ */
+export type DashboardLoadState = {
+  status: DashboardLoadStatus;
+  totalCharts: number;
+  loadedCharts: number;
+  /** once done, loadedCharts + failedCharts === totalCharts */
+  failedCharts: number;
+};
+
+/**
+ * What observeChartFailure gets, once per failed chart query.
+ * Also copied from loadTracker.ts.
+ */
+export type ChartFailure = {
+  chartId: number;
+  /** name shown on the dashboard */
+  chartName: string;
+  /** error text shown on the chart */
+  errorMessage: string;
+};
+
+export type ObserveDashboardLoadCallbackFn = (
+  loadState: DashboardLoadState,
+) => void;
+
+export type ObserveChartFailureCallbackFn = (failure: ChartFailure) => void;
+
 /**
  * Theme mode for the embedded dashboard.
  */
@@ -183,6 +225,15 @@ export type EmbeddedDashboard = {
    */
   setDataMask: (dataMask: Record<string, any>) => Promise<void>;
   getChartStates: () => Promise<Record<string, any>>;
+  /** calls callbackFn when the load status changes, needs emitLoadEvents */
+  observeDashboardLoad: (callbackFn: ObserveDashboardLoadCallbackFn) => void;
+  /** calls callbackFn once per failed chart query, needs emitLoadEvents */
+  observeChartFailure: (callbackFn: ObserveChartFailureCallbackFn) => void;
+  /**
+   * Current load state, works even with emitLoadEvents off.
+   * Rejects on older Superset, so hosts can use it to check for support.
+   */
+  getDashboardLoadState: () => Promise<DashboardLoadState>;
   getChartDataPayloads: (params?: {
     chartId?: number;
   }) => Promise<Record<string, any>>;
@@ -254,6 +305,10 @@ export async function embedDashboard({
       }
       if (dashboardUiConfig.showRowLimitWarning) {
         configNumber += 32;
+      }
+      // 64 is the bit UiConfigContext reads as emitLoadEvents
+      if (dashboardUiConfig.emitLoadEvents) {
+        configNumber += 64;
       }
     }
     return configNumber;
@@ -626,6 +681,19 @@ export async function embedDashboard({
   const observeDataMask = (callbackFn: ObserveDataMaskCallbackFn) => {
     defineHostMethod("observeDataMask", callbackFn);
   };
+
+  // same as observeDataMask: defineHostMethod remembers the callback
+  // so a reloaded iframe gets it again
+  const observeDashboardLoad = (callbackFn: ObserveDashboardLoadCallbackFn) => {
+    defineHostMethod("observeDashboardLoad", callbackFn);
+  };
+  const observeChartFailure = (callbackFn: ObserveChartFailureCallbackFn) => {
+    defineHostMethod("observeChartFailure", callbackFn);
+  };
+
+  // older superset doesn't have this method, so it rejects instead of hanging
+  const getDashboardLoadState = () =>
+    portGet<DashboardLoadState>("getDashboardLoadState");
   // TODO: Add proper types once theming branch is merged
   const setThemeConfig = async (
     themeConfig: Record<string, any>,
@@ -662,6 +730,9 @@ export async function embedDashboard({
     getDataMask,
     setDataMask,
     getChartStates,
+    observeDashboardLoad,
+    observeChartFailure,
+    getDashboardLoadState,
     getChartDataPayloads,
     setThemeConfig,
     setThemeMode,
